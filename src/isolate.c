@@ -366,6 +366,9 @@ int runas(int argc, char** argv) {
     }
   }
 
+  free(profileDir);
+  free(appDataDir);
+  free(localAppDataDir);
 
   memcpy(currentManipEnvSz, terminator, sizeof(wchar_t));
   currentManipEnvSz += sizeof(wchar_t);
