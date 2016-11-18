@@ -451,6 +451,7 @@ int runas(int argc, char** argv) {
    BOOL bSuccess = TRUE;
    HANDLE hParentStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
 
+   // until child exits, read from stdout/stderr and relay to our own stdout/stderr
    for (;;) { 
       DWORD waitResult = WaitForSingleObject(pi.hProcess, 250);
 
@@ -477,6 +478,8 @@ int runas(int argc, char** argv) {
 
   CloseHandle(pi.hProcess);
   CloseHandle(pi.hThread);
+  free(ExePath);
+  free(DirPath);
 
   return code;
 }
