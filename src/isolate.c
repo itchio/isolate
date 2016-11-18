@@ -12,6 +12,8 @@
 #define SEE_MASK_NOASYNC 0x00000100
 #endif
 
+#define BUFSIZE 4096
+
 #define SAFE_APPEND(fmt, arg) \
   { \
     int written = snprintf(tmp, MAX_ARGUMENTS_LENGTH, (fmt), parameters, (arg)); \
@@ -210,7 +212,7 @@ int runas(int argc, char** argv) {
 
   const char* command = argv[1];
 
-  for (int i = 2; i < argc; i++) {
+  for (int i = 1; i < argc; i++) {
     SAFE_APPEND("%s\"%s\" ", argv[i]);
   }
 
@@ -231,6 +233,35 @@ int runas(int argc, char** argv) {
   STARTUPINFOW si;
   ZeroMemory(&si, sizeof(STARTUPINFOW));
   si.cb = sizeof(STARTUPINFOW);
+  si.dwFlags |= STARTF_USESTDHANDLES;
+
+  HANDLE hChildStd_OUT_Rd = NULL;
+  HANDLE hChildStd_OUT_Wr = NULL;
+
+  SECURITY_ATTRIBUTES saAttr;
+
+  saAttr.nLength = sizeof(SECURITY_ATTRIBUTES); 
+  saAttr.bInheritHandle = TRUE; 
+  saAttr.lpSecurityDescriptor = NULL; 
+
+  if (!CreatePipe(&hChildStd_OUT_Rd, &hChildStd_OUT_Wr, &saAttr, 0))  {
+    wbail(127, "StdoutRd CreatePipe");
+  }
+
+  if (!SetHandleInformation(hChildStd_OUT_Rd, HANDLE_FLAG_INHERIT, 0)) {
+    wbail(127, "Stdout SetHandleInformation"); 
+  }
+
+  DWORD waitMode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+
+  // sic. can be used with anonymous pipes too, even though msdn advises against it
+  // https://msdn.microsoft.com/en-us/library/windows/desktop/aa365787(v=vs.85).aspx
+  if (!SetNamedPipeHandleState(hChildStd_OUT_Rd, &waitMode, NULL, NULL)) {
+    wbail(127, "Stdout SetNamedPipeHandleState"); 
+  }
+
+  si.hStdError = hChildStd_OUT_Wr;
+  si.hStdOutput = hChildStd_OUT_Wr;
 
   if (!LogonUserW(wuser, L".", wpassword,
 	LOGON32_LOGON_INTERACTIVE,
@@ -432,7 +463,28 @@ int runas(int argc, char** argv) {
     wbail(127, "CreateProcessWithLogonW");
   }
 
-  WaitForSingleObject(pi.hProcess, INFINITE);
+   DWORD dwRead, dwWritten; 
+   CHAR chBuf[BUFSIZE]; 
+   BOOL bSuccess = TRUE;
+   HANDLE hParentStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
+
+   for (;;) { 
+      DWORD waitResult = WaitForSingleObject(pi.hProcess, 250);
+
+      while (bSuccess) {
+        bSuccess = ReadFile(hChildStd_OUT_Rd, chBuf, BUFSIZE, &dwRead, NULL);
+        if(bSuccess && dwRead > 0) {
+          bSuccess = WriteFile(hParentStdOut, chBuf, dwRead, &dwWritten, NULL);
+          if (!bSuccess) {
+            break; 
+          }
+        }
+      }
+
+      if (waitResult == WAIT_OBJECT_0) {
+        break;
+      }
+   }
 
   DWORD code;
   if (GetExitCodeProcess(pi.hProcess, &code) == 0) {
