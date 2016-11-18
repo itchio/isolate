@@ -439,36 +439,71 @@ int runas(int argc, char** argv) {
 
   if (!CreateProcessWithLogonW(wuser, L".", wpassword,
     LOGON_WITH_PROFILE, wcommand, wparameters,
-    CREATE_UNICODE_ENVIRONMENT,
+    CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED | CREATE_BREAKAWAY_FROM_JOB,
     lpvManipEnv,
     DirPath,
     &si, &pi)) {
     wbail(127, "CreateProcessWithLogonW");
   }
 
-   DWORD dwRead, dwWritten; 
-   CHAR chBuf[BUFSIZE]; 
-   BOOL bSuccess = TRUE;
-   HANDLE hParentStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
+  HANDLE hJob;
+  SECURITY_ATTRIBUTES jobAttributes;
+  ZeroMemory(&jobAttributes, sizeof(SECURITY_ATTRIBUTES));
 
-   // until child exits, read from stdout/stderr and relay to our own stdout/stderr
-   for (;;) { 
-      DWORD waitResult = WaitForSingleObject(pi.hProcess, 250);
+  hJob = CreateJobObject(
+    NULL, /* security attributes. NULL = default, default isn't inheritable, which is what we want' */
+    argv[1] /* job name */
+  );
 
-      while (bSuccess) {
-        bSuccess = ReadFile(hChildStd_OUT_Rd, chBuf, BUFSIZE, &dwRead, NULL);
-        if(bSuccess && dwRead > 0) {
-          bSuccess = WriteFile(hParentStdOut, chBuf, dwRead, &dwWritten, NULL);
-          if (!bSuccess) {
-            break; 
-          }
+  if (!hJob) {
+    wbail(127, "CreateJobObject");
+  }
+
+  JOBOBJECT_EXTENDED_LIMIT_INFORMATION extendedJobLimits;
+  ZeroMemory(&extendedJobLimits, sizeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
+
+  // kill whole process tree if parent dies
+  extendedJobLimits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+
+  if (!SetInformationJobObject(hJob, JobObjectExtendedLimitInformation, &extendedJobLimits, sizeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION))) {
+    wbail(127, "SetInformationJobObject");
+  }
+
+  if (!AssignProcessToJobObject(hJob, GetCurrentProcess())) {
+    wbail(127, "AssignProcessToJobObject (parent)");
+  }
+
+  if (!AssignProcessToJobObject(hJob, pi.hProcess)) {
+    wbail(127, "AssignProcessToJobObject (child)");
+  }
+
+  if (!ResumeThread(pi.hThread)) {
+    wbail(127, "ResumeThread");
+  }
+
+  DWORD dwRead, dwWritten; 
+  CHAR chBuf[BUFSIZE]; 
+  BOOL bSuccess = TRUE;
+  HANDLE hParentStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
+
+  // until child exits, read from stdout/stderr and relay to our own stdout/stderr
+  for (;;) { 
+    DWORD waitResult = WaitForSingleObject(pi.hProcess, 250);
+
+    while (bSuccess) {
+      bSuccess = ReadFile(hChildStd_OUT_Rd, chBuf, BUFSIZE, &dwRead, NULL);
+      if(bSuccess && dwRead > 0) {
+        bSuccess = WriteFile(hParentStdOut, chBuf, dwRead, &dwWritten, NULL);
+        if (!bSuccess) {
+          break; 
         }
       }
+    }
 
-      if (waitResult == WAIT_OBJECT_0) {
-        break;
-      }
-   }
+    if (waitResult == WAIT_OBJECT_0) {
+      break;
+    }
+  }
 
   DWORD code;
   if (GetExitCodeProcess(pi.hProcess, &code) == 0) {
