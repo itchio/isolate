@@ -427,32 +427,15 @@ int runas(int argc, char** argv) {
 
   wchar_t *ExePath;
   toWideChar(command, &ExePath);
-  wprintf(L"ExePath = '%s'\n", ExePath);
-
-  wchar_t *Drive = malloc(sizeof(wchar_t) * MAX_PATH);
-  Drive[0] = (wchar_t) '\0';
-
-  wchar_t *DirName = malloc(sizeof(wchar_t) * MAX_PATH);
-  DirName[0] = (wchar_t) '\0';
+  wprintf(L"exe = '%s'\n", ExePath);
 
   wchar_t *DirPath = malloc(sizeof(wchar_t) * MAX_PATH);
-  DirPath[0] = (wchar_t) '\0';
 
-  _wsplitpath(ExePath, Drive, DirName, NULL, NULL);
-
-  if (wcslen(DirName) == 0) {
-    GetCurrentDirectoryW(MAX_PATH, DirPath);
-  } else {
-    wsprintfW(DirPath, L"%s%s", Drive, DirName);
+  if (!GetCurrentDirectoryW(MAX_PATH, DirPath)) {
+    wbail(127, "GetCurrentDirectoryW");
   }
 
-  int LenDirPath = wcslen(DirPath);
-  if (DirPath[LenDirPath - 1] == '\\') {
-    DirPath[LenDirPath - 1] = '\0';
-  }
-
-  wprintf(L"ExePath = '%s'\n", ExePath);
-  wprintf(L"DirPath = '%s'\n", DirPath);
+  wprintf(L"cwd = '%s'\n", DirPath);
 
   if (!CreateProcessWithLogonW(wuser, L".", wpassword,
     LOGON_WITH_PROFILE, wcommand, wparameters,
