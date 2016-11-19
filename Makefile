@@ -15,6 +15,7 @@ endif
 
 all:
 	${GCC} ${CFLAGS} ${ISOLATE_CFLAGS} -c src/isolate.c
-	${WINDRES} --input isolate.rc --output isolate.res --output-format=coff
-	${GCC} -static isolate.o isolate.res -o isolate.exe ${LDFLAGS}
+	#${WINDRES} --input isolate.rc --output isolate.res --output-format=coff
+	#${GCC} -static isolate.o isolate.res -o isolate.exe ${LDFLAGS}
+	${GCC} -static isolate.o -o isolate.exe ${LDFLAGS}
 	${STRIP} isolate.exe

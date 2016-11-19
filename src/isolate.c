@@ -437,15 +437,6 @@ int runas(int argc, char** argv) {
 
   wprintf(L"cwd = '%s'\n", DirPath);
 
-  if (!CreateProcessWithLogonW(wuser, L".", wpassword,
-    LOGON_WITH_PROFILE, wcommand, wparameters,
-    CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED | CREATE_BREAKAWAY_FROM_JOB,
-    lpvManipEnv,
-    DirPath,
-    &si, &pi)) {
-    wbail(127, "CreateProcessWithLogonW");
-  }
-
   HANDLE hJob;
   SECURITY_ATTRIBUTES jobAttributes;
   ZeroMemory(&jobAttributes, sizeof(SECURITY_ATTRIBUTES));
@@ -473,8 +464,14 @@ int runas(int argc, char** argv) {
     wbail(127, "AssignProcessToJobObject (parent)");
   }
 
-  if (!AssignProcessToJobObject(hJob, pi.hProcess)) {
-    wbail(127, "AssignProcessToJobObject (child)");
+
+  if (!CreateProcessWithLogonW(wuser, L".", wpassword,
+    LOGON_WITH_PROFILE, wcommand, wparameters,
+    CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED,
+    lpvManipEnv,
+    DirPath,
+    &si, &pi)) {
+    wbail(127, "CreateProcessWithLogonW");
   }
 
   if (!ResumeThread(pi.hThread)) {
@@ -513,6 +510,7 @@ int runas(int argc, char** argv) {
 
   CloseHandle(pi.hProcess);
   CloseHandle(pi.hThread);
+  CloseHandle(hJob);
   free(ExePath);
   free(DirPath);
 
