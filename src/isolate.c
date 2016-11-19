@@ -270,9 +270,13 @@ int runas(int argc, char** argv) {
     wbail(127, "LogonUserW");
   }
 
-  if (!CreateEnvironmentBlock(&lpvEnv, hToken, TRUE)) {
-    CloseHandle(hToken);
-    wbail(127, "CreateEnvironmentBlock");
+  // if (!CreateEnvironmentBlock(&lpvEnv, hToken, TRUE)) {
+  //   CloseHandle(hToken);
+  //   wbail(127, "CreateEnvironmentBlock");
+  // }
+
+  if (!(lpvEnv = GetEnvironmentStringsW())) {
+     wbail(127, "GetEnvironmentStrings");
   }
 
 
@@ -296,13 +300,13 @@ int runas(int argc, char** argv) {
   if (FAILED(shRes)) {
     ebail(127, "SHGetFolderPath", shRes);
   }
-  wprintf(L"AppData dir = %s\n", appDataDir);
+  wprintf(L"Roaming AppData dir = %s\n", appDataDir);
 
   shRes = SHGetFolderPathW(NULL, CSIDL_LOCAL_APPDATA | CSIDL_FLAG_CREATE, NULL, SHGFP_TYPE_CURRENT, localAppDataDir);
   if (FAILED(shRes)) {
     ebail(127, "SHGetFolderPath", shRes);
   }
-  wprintf(L"AppData dir = %s\n", localAppDataDir);
+  wprintf(L"Local AppData dir = %s\n", localAppDataDir);
 
   if (!RevertToSelf()) {
     CloseHandle(hToken);
@@ -404,8 +408,12 @@ int runas(int argc, char** argv) {
   memcpy(currentManipEnvSz, terminator, sizeof(wchar_t));
   currentManipEnvSz += sizeof(wchar_t);
 
-  if (!DestroyEnvironmentBlock(lpvEnv)) {
-    wbail(127, "DestroyEnvironmentBlock");
+  // if (!DestroyEnvironmentBlock(lpvEnv)) {
+  //   wbail(127, "DestroyEnvironmentBlock");
+  // }
+
+  if (!FreeEnvironmentStrings(lpvEnv)) {
+    wbail(127, "FreeEnvironmentStrings");
   }
 
   memcpy(currentManipEnvSz, terminator, sizeof(wchar_t));
@@ -443,7 +451,7 @@ int runas(int argc, char** argv) {
 
   hJob = CreateJobObject(
     NULL, /* security attributes. NULL = default, default isn't inheritable, which is what we want' */
-    argv[1] /* job name */
+    NULL /* job name */
   );
 
   if (!hJob) {
@@ -483,9 +491,21 @@ int runas(int argc, char** argv) {
   BOOL bSuccess = TRUE;
   HANDLE hParentStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
 
+  JOBOBJECT_BASIC_PROCESS_ID_LIST processIdList;
+  ZeroMemory(&processIdList, sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST));
+
+  HRESULT queryRes;
+
   // until child exits, read from stdout/stderr and relay to our own stdout/stderr
   for (;;) { 
-    DWORD waitResult = WaitForSingleObject(pi.hProcess, 250);
+    // DWORD waitResult = WaitForSingleObject(pi.hProcess, 250);
+    // DWORD waitResult = WaitForSingleObject(hJob, 250);
+    if (!QueryInformationJobObject(hJob, JobObjectBasicProcessIdList, &processIdList, sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST), NULL)) {
+      queryRes = GetLastError();
+      if (queryRes != ERROR_MORE_DATA) {
+        ebail(127, "QueryInformationJobObject", queryRes);
+      }
+    }
 
     while (bSuccess) {
       bSuccess = ReadFile(hChildStd_OUT_Rd, chBuf, BUFSIZE, &dwRead, NULL);
@@ -497,9 +517,17 @@ int runas(int argc, char** argv) {
       }
     }
 
-    if (waitResult == WAIT_OBJECT_0) {
+    // if (waitResult == WAIT_OBJECT_0) {
+    //   break;
+    // }
+
+    // it's just us left? quit.
+    if (processIdList.NumberOfAssignedProcesses == 1) {
       break;
     }
+
+    // don't busywait - 500ms is enough
+    Sleep(500);
   }
 
   DWORD code;
