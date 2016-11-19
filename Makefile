@@ -13,9 +13,25 @@ GCC:=${TRIPLET}-${WINDRES}
 STRIP:=${TRIPLET}-${STRIP}
 endif
 
-all:
-	${GCC} ${CFLAGS} ${ISOLATE_CFLAGS} -c src/isolate.c
-	#${WINDRES} --input isolate.rc --output isolate.res --output-format=coff
-	#${GCC} -static isolate.o isolate.res -o isolate.exe ${LDFLAGS}
-	${GCC} -static isolate.o -o isolate.exe ${LDFLAGS}
+OBJECTS := strings.o relay.o errors.o isolate.o 
+
+.PHONY: clean
+
+all: $(OBJECTS)
+	${GCC} -static $(OBJECTS) -o isolate.exe ${LDFLAGS}
 	${STRIP} isolate.exe
+
+isolate.o: src/isolate.c
+	${GCC} ${CFLAGS} ${ISOLATE_CFLAGS} -c src/isolate.c
+
+strings.o: src/strings.c
+	${GCC} ${CFLAGS} ${ISOLATE_CFLAGS} -c src/strings.c
+
+errors.o: src/errors.c
+	${GCC} ${CFLAGS} ${ISOLATE_CFLAGS} -c src/errors.c
+
+relay.o: src/relay.c
+	${GCC} ${CFLAGS} ${ISOLATE_CFLAGS} -c src/relay.c
+
+clean:
+	rm -f $(OBJECTS) isolate.exe

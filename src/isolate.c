@@ -7,84 +7,33 @@
 #include <lm.h>
 #include <stdlib.h>
 #include <time.h>
+#include <process.h>
 
-#ifndef SEE_MASK_NOASYNC
-#define SEE_MASK_NOASYNC 0x00000100
-#endif
+#include "strings.h"
+#include "errors.h"
+#include "relay.h"
 
-#define BUFSIZE 4096
+#define RELAY_BUFSIZE 4096
 
-#define SAFE_APPEND(fmt, arg) \
-  { \
-    int written = snprintf(tmp, MAX_ARGUMENTS_LENGTH, (fmt), parameters, (arg)); \
-    if (written < 0 || written >= MAX_ARGUMENTS_LENGTH) { \
-      bail(1, "argument string too long"); \
-    } \
-    \
-    strncpy(parameters, tmp, MAX_ARGUMENTS_LENGTH); \
-  }
-
-static void bail(int code, char *msg) {
-  fprintf(stderr, "%s\n", msg);
-  exit(code);
-}
-
-static void wbail(int code, char *msg) {
-  LPVOID lpvMessageBuffer;
-
-  FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | 
-    FORMAT_MESSAGE_FROM_SYSTEM,
-    NULL, GetLastError(), 
-    MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), 
-    (LPWSTR)&lpvMessageBuffer, 0, NULL);
-
-  printf("API = %s.\n", msg);
-  wprintf(L"error code = %d.\n", GetLastError());
-  wprintf(L"message    = %s.\n", (LPWSTR)lpvMessageBuffer);
-
-  LocalFree(lpvMessageBuffer);
-
-  fprintf(stderr, "%s\n", msg);
-  exit(code);
-}
-
-static void ebail(int code, char *msg, HRESULT err) {
-  LPVOID lpvMessageBuffer;
-
-  FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | 
-    FORMAT_MESSAGE_FROM_SYSTEM,
-    NULL, err, 
-    MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), 
-    (LPWSTR)&lpvMessageBuffer, 0, NULL);
-
-  printf("API = %s.\n", msg);
-  wprintf(L"error code = %d.\n", err);
-  wprintf(L"message    = %s.\n", (LPWSTR)lpvMessageBuffer);
-
-  LocalFree(lpvMessageBuffer);
-
-  fprintf(stderr, "%s\n", msg);
-  exit(code);
-}
-
-
-void toWideChar (const char *s, wchar_t **ws) {
-  int wchars_num = MultiByteToWideChar(CP_UTF8, 0, s, -1, NULL, 0);
-  *ws = malloc(wchars_num * sizeof(wchar_t));
-  MultiByteToWideChar(CP_UTF8, 0, s, -1, *ws, wchars_num);
-}
-
+/** Letters used when generating a random password */
 const char *LETTERS = "abcdefghijklmnopqrstuvwxyz";
+/** Numbers used when generating a random password */
 const char *NUMBERS = "0123456789";
+/** Special characters used when generating a random password */
 const char *SPECIAL = "!_?-.;+/()=&";
 
+/**
+ * Pick a random character from a given character set
+ */
 char randomCharFromSet(const char *set) {
   return set[rand() % strlen(set)];
 }
 
 char *generatePassword() {
+  // Initiate random seed from time
   srand(time(NULL));
 
+  // We'll generate a 16-character password
   char *pwd = (char *) malloc(17);
   for (int i = 0; i < 16; i++)
   {
@@ -106,10 +55,14 @@ char *generatePassword() {
     pwd[i] = newchar;
   }
 
-  pwd[16] = 0;
+  pwd[16] = '\0';
   return pwd;
 }
 
+/**
+ * Retrieve a value for itch-player from the registry.
+ * The key can be L"username" or L"password"
+ */
 WCHAR *getItchPlayerData(WCHAR *data) {
   HKEY key;
   LONG status = RegCreateKeyExW(HKEY_CURRENT_USER, L"SOFTWARE\\itch\\Sandbox", 0, NULL,
@@ -132,6 +85,9 @@ WCHAR *getItchPlayerData(WCHAR *data) {
   return buffer;
 }
 
+/**
+ * Store a value for itch-player into the registry.
+ */
 void setItchPlayerData(WCHAR *data, WCHAR *value) {
   HKEY key;
   LONG status = RegCreateKeyExW(HKEY_CURRENT_USER, L"SOFTWARE\\itch\\Sandbox", 0, NULL,
@@ -146,6 +102,11 @@ void setItchPlayerData(WCHAR *data, WCHAR *value) {
   RegCloseKey(key);
 }
 
+/**
+ * The 'check' command ensures that isolate is set up properly:
+ * the itch-player account exists, we have valid credentials to log
+ * into it, etc.
+ */
 int check(int argc, char** argv) {
   WCHAR* wuser = getItchPlayerData(L"username");
   WCHAR* wpassword = getItchPlayerData(L"password");
@@ -160,6 +121,8 @@ int check(int argc, char** argv) {
         &hToken)) {
     int errCode = GetLastError();
     if (errCode == ERROR_PASSWORD_EXPIRED || errCode == ERROR_PASSWORD_MUST_CHANGE) {
+      /* Some Windows versions (10 for example) expire password automatically. */
+      /* Thankfully, we can renew it without administrator access, simply by using the old one. */
       printf("password has expired, setting new password!\n");
       WCHAR *wnewpassword;
       toWideChar(generatePassword(), &wnewpassword);
@@ -235,46 +198,32 @@ int runas(int argc, char** argv) {
   si.cb = sizeof(STARTUPINFOW);
   si.dwFlags |= STARTF_USESTDHANDLES;
 
+  /* Set up stdout and stderr relays */
+
+  // handle for stdout of parent process
+  HANDLE hParentStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
+  HANDLE hParentStdErr = GetStdHandle(STD_ERROR_HANDLE);
+
+  // handles for stdout/stderr pipe given to child process
   HANDLE hChildStd_OUT_Rd = NULL;
   HANDLE hChildStd_OUT_Wr = NULL;
+  HANDLE hChildStd_ERR_Rd = NULL;
+  HANDLE hChildStd_ERR_Wr = NULL;
 
-  SECURITY_ATTRIBUTES saAttr;
+  createChildPipe(&hChildStd_OUT_Rd, &hChildStd_OUT_Wr);
+  createChildPipe(&hChildStd_ERR_Rd, &hChildStd_ERR_Wr);
 
-  saAttr.nLength = sizeof(SECURITY_ATTRIBUTES); 
-  saAttr.bInheritHandle = TRUE; 
-  saAttr.lpSecurityDescriptor = NULL; 
-
-  if (!CreatePipe(&hChildStd_OUT_Rd, &hChildStd_OUT_Wr, &saAttr, 0))  {
-    wbail(127, "StdoutRd CreatePipe");
-  }
-
-  if (!SetHandleInformation(hChildStd_OUT_Rd, HANDLE_FLAG_INHERIT, 0)) {
-    wbail(127, "Stdout SetHandleInformation"); 
-  }
-
-  DWORD waitMode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
-
-  // sic. can be used with anonymous pipes too, even though msdn advises against it
-  // https://msdn.microsoft.com/en-us/library/windows/desktop/aa365787(v=vs.85).aspx
-  if (!SetNamedPipeHandleState(hChildStd_OUT_Rd, &waitMode, NULL, NULL)) {
-    wbail(127, "Stdout SetNamedPipeHandleState"); 
-  }
-
-  si.hStdError = hChildStd_OUT_Wr;
   si.hStdOutput = hChildStd_OUT_Wr;
+  si.hStdError = hChildStd_ERR_Wr;
 
   if (!LogonUserW(wuser, L".", wpassword,
-	LOGON32_LOGON_INTERACTIVE,
-	LOGON32_PROVIDER_DEFAULT,
-	&hToken)) {
+      LOGON32_LOGON_INTERACTIVE,
+      LOGON32_PROVIDER_DEFAULT,
+      &hToken)) {
     wbail(127, "LogonUserW");
   }
 
-  // if (!CreateEnvironmentBlock(&lpvEnv, hToken, TRUE)) {
-  //   CloseHandle(hToken);
-  //   wbail(127, "CreateEnvironmentBlock");
-  // }
-
+  /* We're eschewing CreateEnviromentBlock because it tends to deny access to it too often */
   if (!(lpvEnv = GetEnvironmentStringsW())) {
      wbail(127, "GetEnvironmentStrings");
   }
@@ -354,6 +303,9 @@ int runas(int argc, char** argv) {
     wchar_t *newvar = (wchar_t *) malloc(bufsize + 256 * sizeof(wchar_t));
     memcpy(newvar, ptr, bufsize);
 
+    // Find separator for each environment entry
+    // The block looks like this:
+    // Key1=Value1\0Key2=Value2\0Key3=Value3\0\0
     wchar_t *separator = wcschr(newvar, L'=');
     if (!separator) {
       wprintf(L"[ENV] missing separator for %s\n", newvar);
@@ -408,10 +360,6 @@ int runas(int argc, char** argv) {
   memcpy(currentManipEnvSz, terminator, sizeof(wchar_t));
   currentManipEnvSz += sizeof(wchar_t);
 
-  // if (!DestroyEnvironmentBlock(lpvEnv)) {
-  //   wbail(127, "DestroyEnvironmentBlock");
-  // }
-
   if (!FreeEnvironmentStrings(lpvEnv)) {
     wbail(127, "FreeEnvironmentStrings");
   }
@@ -438,7 +386,6 @@ int runas(int argc, char** argv) {
   wprintf(L"exe = '%s'\n", ExePath);
 
   wchar_t *DirPath = malloc(sizeof(wchar_t) * MAX_PATH);
-
   if (!GetCurrentDirectoryW(MAX_PATH, DirPath)) {
     wbail(127, "GetCurrentDirectoryW");
   }
@@ -450,8 +397,11 @@ int runas(int argc, char** argv) {
   ZeroMemory(&jobAttributes, sizeof(SECURITY_ATTRIBUTES));
 
   hJob = CreateJobObject(
-    NULL, /* security attributes. NULL = default, default isn't inheritable, which is what we want' */
-    NULL /* job name */
+    /* security attributes. NULL = default
+       default isn't inheritable, which is what we want */
+    NULL,
+    /* job name */
+    NULL
   );
 
   if (!hJob) {
@@ -472,54 +422,57 @@ int runas(int argc, char** argv) {
     wbail(127, "AssignProcessToJobObject (parent)");
   }
 
-
+  // all processes created will inherit from our job object
+  // (along with the subprocesses they create, and so on for the whole tree)
   if (!CreateProcessWithLogonW(wuser, L".", wpassword,
     LOGON_WITH_PROFILE, wcommand, wparameters,
-    CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED,
+    CREATE_UNICODE_ENVIRONMENT,
     lpvManipEnv,
     DirPath,
     &si, &pi)) {
     wbail(127, "CreateProcessWithLogonW");
   }
 
-  if (!ResumeThread(pi.hThread)) {
-    wbail(127, "ResumeThread");
-  }
-
-  DWORD dwRead, dwWritten; 
-  CHAR chBuf[BUFSIZE]; 
-  BOOL bSuccess = TRUE;
-  HANDLE hParentStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
-
   JOBOBJECT_BASIC_PROCESS_ID_LIST processIdList;
   ZeroMemory(&processIdList, sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST));
 
+  // relay stdout and stderr in threads
+  HANDLE outThread;
+  HANDLE errThread;
+
+  RelayArgs outRelayArgs = {
+    bufsize: RELAY_BUFSIZE,
+    in: hChildStd_OUT_Rd,
+    out: hParentStdOut,
+  };
+  outThread = _beginthreadex(NULL, 0, relayThread, &outRelayArgs, 0, NULL);
+
+  if (!outThread) {
+    wbail(127, "CreateThread (out)");
+  }
+
+  RelayArgs errRelayArgs = {
+    bufsize: RELAY_BUFSIZE,
+    in: hChildStd_ERR_Rd,
+    out: hParentStdErr,
+  };
+  errThread = _beginthreadex(NULL, 0, relayThread, &errRelayArgs, 0, NULL);
+
+  if (!errThread) {
+    wbail(127, "CreateThread (err)");
+  }
+
   HRESULT queryRes;
 
-  // until child exits, read from stdout/stderr and relay to our own stdout/stderr
-  for (;;) { 
-    // DWORD waitResult = WaitForSingleObject(pi.hProcess, 250);
-    // DWORD waitResult = WaitForSingleObject(hJob, 250);
+  // query job info until we're the only process left
+  while (1) { 
     if (!QueryInformationJobObject(hJob, JobObjectBasicProcessIdList, &processIdList, sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST), NULL)) {
       queryRes = GetLastError();
+      // ERROR_MORE_DATA is expected since we pass a processIdList with room for only 1
       if (queryRes != ERROR_MORE_DATA) {
         ebail(127, "QueryInformationJobObject", queryRes);
       }
     }
-
-    while (bSuccess) {
-      bSuccess = ReadFile(hChildStd_OUT_Rd, chBuf, BUFSIZE, &dwRead, NULL);
-      if(bSuccess && dwRead > 0) {
-        bSuccess = WriteFile(hParentStdOut, chBuf, dwRead, &dwWritten, NULL);
-        if (!bSuccess) {
-          break; 
-        }
-      }
-    }
-
-    // if (waitResult == WAIT_OBJECT_0) {
-    //   break;
-    // }
 
     // it's just us left? quit.
     if (processIdList.NumberOfAssignedProcesses == 1) {
@@ -541,6 +494,15 @@ int runas(int argc, char** argv) {
   CloseHandle(hJob);
   free(ExePath);
   free(DirPath);
+
+  // join both relay threads, which should exit naturally because of EOF
+  if (!WaitForSingleObject(outThread, INFINITE)) {
+    wbail(217, "WaitForSingleObject (out thread)");
+  }
+
+  if (!WaitForSingleObject(errThread, INFINITE)) {
+    wbail(217, "WaitForSingleObject (err thread)");
+  }
 
   return code;
 }
