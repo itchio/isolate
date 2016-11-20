@@ -18,7 +18,9 @@ void createChildPipe(HANDLE *lpH_Rd, HANDLE *lpH_Wr) {
   }
 }
 
-unsigned int relayThread(RelayArgs *args) {
+unsigned int relayThread(void *argptr) {
+  RelayArgs *args = argptr;
+
   DWORD dwRead, dwWritten; 
   CHAR chBuf[args->bufsize]; 
   BOOL bSuccess = TRUE;

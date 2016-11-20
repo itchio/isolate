@@ -418,8 +418,12 @@ int runas(int argc, char** argv) {
     wbail(127, "SetInformationJobObject");
   }
 
+  BOOLEAN useJob = TRUE;
+
   if (!AssignProcessToJobObject(hJob, GetCurrentProcess())) {
-    wbail(127, "AssignProcessToJobObject (parent)");
+    useJob = FALSE;
+    printf("job object assignment failed, settling for partial functionality\n");
+    // wbail(127, "AssignProcessToJobObject (parent)");
   }
 
   // all processes created will inherit from our job object
@@ -433,9 +437,6 @@ int runas(int argc, char** argv) {
     wbail(127, "CreateProcessWithLogonW");
   }
 
-  JOBOBJECT_BASIC_PROCESS_ID_LIST processIdList;
-  ZeroMemory(&processIdList, sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST));
-
   // relay stdout and stderr in threads
   HANDLE outThread;
   HANDLE errThread;
@@ -445,7 +446,7 @@ int runas(int argc, char** argv) {
     in: hChildStd_OUT_Rd,
     out: hParentStdOut,
   };
-  outThread = _beginthreadex(NULL, 0, relayThread, &outRelayArgs, 0, NULL);
+  outThread = (HANDLE) _beginthreadex(NULL, 0, relayThread, &outRelayArgs, 0, NULL);
 
   if (!outThread) {
     wbail(127, "CreateThread (out)");
@@ -456,7 +457,7 @@ int runas(int argc, char** argv) {
     in: hChildStd_ERR_Rd,
     out: hParentStdErr,
   };
-  errThread = _beginthreadex(NULL, 0, relayThread, &errRelayArgs, 0, NULL);
+  errThread = (HANDLE) _beginthreadex(NULL, 0, relayThread, &errRelayArgs, 0, NULL);
 
   if (!errThread) {
     wbail(127, "CreateThread (err)");
@@ -464,23 +465,30 @@ int runas(int argc, char** argv) {
 
   HRESULT queryRes;
 
-  // query job info until we're the only process left
-  while (1) { 
-    if (!QueryInformationJobObject(hJob, JobObjectBasicProcessIdList, &processIdList, sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST), NULL)) {
-      queryRes = GetLastError();
-      // ERROR_MORE_DATA is expected since we pass a processIdList with room for only 1
-      if (queryRes != ERROR_MORE_DATA) {
-        ebail(127, "QueryInformationJobObject", queryRes);
+  if (useJob) {
+    JOBOBJECT_BASIC_PROCESS_ID_LIST processIdList;
+    ZeroMemory(&processIdList, sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST));
+
+    // query job info until we're the only process left
+    while (1) { 
+      if (!QueryInformationJobObject(hJob, JobObjectBasicProcessIdList, &processIdList, sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST), NULL)) {
+        queryRes = GetLastError();
+        // ERROR_MORE_DATA is expected since we pass a processIdList with room for only 1
+        if (queryRes != ERROR_MORE_DATA) {
+          ebail(127, "QueryInformationJobObject", queryRes);
+        }
       }
-    }
 
-    // it's just us left? quit.
-    if (processIdList.NumberOfAssignedProcesses == 1) {
-      break;
-    }
+      // it's just us left? quit.
+      if (processIdList.NumberOfAssignedProcesses == 1) {
+        break;
+      }
 
-    // don't busywait - 500ms is enough
-    Sleep(500);
+      // don't busywait - 500ms is enough
+      Sleep(500);
+    }
+  } else {
+    WaitForSingleObject(pi.hProcess, INFINITE);
   }
 
   DWORD code;
@@ -495,14 +503,9 @@ int runas(int argc, char** argv) {
   free(ExePath);
   free(DirPath);
 
-  // join both relay threads, which should exit naturally because of EOF
-  if (!WaitForSingleObject(outThread, INFINITE)) {
-    wbail(217, "WaitForSingleObject (out thread)");
-  }
-
-  if (!WaitForSingleObject(errThread, INFINITE)) {
-    wbail(217, "WaitForSingleObject (err thread)");
-  }
+  // join both relay threads, which exit naturally because of EOF
+  WaitForSingleObject(outThread, 1000);
+  WaitForSingleObject(errThread, 1000);
 
   return code;
 }

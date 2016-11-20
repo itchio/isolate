@@ -9,4 +9,4 @@ typedef struct RelayArgs {
 
 void createChildPipe (HANDLE *lpH_Rd, HANDLE *lpH_Wr);
 
-unsigned int relayThread(RelayArgs *args);
+unsigned int relayThread(void *args);
