@@ -190,12 +190,10 @@ int runas(int argc, char** argv) {
   int redirectOut = 1;
   const int MAX_CONSOLE_LENGTH_ENV = MAX_ARGUMENTS_LENGTH;
   char consoleEnv[MAX_CONSOLE_LENGTH_ENV];
-  if (0 == GetEnvironmentVariable("ISOLATE_DISABLE_REDIRECTS", consoleEnv, MAX_CONSOLE_LENGTH_ENV)) {
-    wbail(127, "GetEnvironmentVariable");
-  }
-
-  if (strcmp(consoleEnv, "1") == 0) {
-    redirectOut = 0;
+  if (GetEnvironmentVariable("ISOLATE_DISABLE_REDIRECTS", consoleEnv, MAX_CONSOLE_LENGTH_ENV) > 0) {
+    if (strcmp(consoleEnv, "1") == 0) {
+      redirectOut = 0;
+    }
   }
 
   HANDLE hToken;
