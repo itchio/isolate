@@ -187,6 +187,17 @@ int runas(int argc, char** argv) {
   toWideChar(command, &wcommand);
   toWideChar(parameters, &wparameters);
 
+  int redirectOut = 1;
+  const int MAX_CONSOLE_LENGTH_ENV = MAX_ARGUMENTS_LENGTH;
+  char consoleEnv[MAX_CONSOLE_LENGTH_ENV];
+  if (0 == GetEnvironmentVariable("ISOLATE_DISABLE_REDIRECTS", consoleEnv, MAX_CONSOLE_LENGTH_ENV)) {
+    wbail(127, "GetEnvironmentVariable");
+  }
+
+  if (strcmp(consoleEnv, "1") == 0) {
+    redirectOut = 0;
+  }
+
   HANDLE hToken;
   LPVOID lpvEnv;
 
@@ -196,13 +207,6 @@ int runas(int argc, char** argv) {
   STARTUPINFOW si;
   ZeroMemory(&si, sizeof(STARTUPINFOW));
   si.cb = sizeof(STARTUPINFOW);
-  si.dwFlags |= STARTF_USESTDHANDLES;
-
-  /* Set up stdout and stderr relays */
-
-  // handle for stdout of parent process
-  HANDLE hParentStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
-  HANDLE hParentStdErr = GetStdHandle(STD_ERROR_HANDLE);
 
   // handles for stdout/stderr pipe given to child process
   HANDLE hChildStd_OUT_Rd = NULL;
@@ -210,11 +214,15 @@ int runas(int argc, char** argv) {
   HANDLE hChildStd_ERR_Rd = NULL;
   HANDLE hChildStd_ERR_Wr = NULL;
 
-  createChildPipe(&hChildStd_OUT_Rd, &hChildStd_OUT_Wr);
-  createChildPipe(&hChildStd_ERR_Rd, &hChildStd_ERR_Wr);
+  if (redirectOut) {
+    si.dwFlags |= STARTF_USESTDHANDLES;
 
-  si.hStdOutput = hChildStd_OUT_Wr;
-  si.hStdError = hChildStd_ERR_Wr;
+    createChildPipe(&hChildStd_OUT_Rd, &hChildStd_OUT_Wr);
+    createChildPipe(&hChildStd_ERR_Rd, &hChildStd_ERR_Wr);
+
+    si.hStdOutput = hChildStd_OUT_Wr;
+    si.hStdError = hChildStd_ERR_Wr;
+  }
 
   if (!LogonUserW(wuser, L".", wpassword,
       LOGON32_LOGON_INTERACTIVE,
@@ -227,7 +235,6 @@ int runas(int argc, char** argv) {
   if (!(lpvEnv = GetEnvironmentStringsW())) {
      wbail(127, "GetEnvironmentStrings");
   }
-
 
   DWORD shBufSize = 2048;
   wchar_t *profileDir = malloc(sizeof(wchar_t) * shBufSize);
@@ -441,26 +448,29 @@ int runas(int argc, char** argv) {
   HANDLE outThread;
   HANDLE errThread;
 
-  RelayArgs outRelayArgs = {
-    bufsize: RELAY_BUFSIZE,
-    in: hChildStd_OUT_Rd,
-    out: hParentStdOut,
-  };
-  outThread = (HANDLE) _beginthreadex(NULL, 0, relayThread, &outRelayArgs, 0, NULL);
+  if (redirectOut) {
+    /* Set up stdout and stderr relays */
+    RelayArgs outRelayArgs = {
+      bufsize: RELAY_BUFSIZE,
+      in: hChildStd_OUT_Rd,
+      out: GetStdHandle(STD_OUTPUT_HANDLE),
+    };
+    outThread = (HANDLE) _beginthreadex(NULL, 0, relayThread, &outRelayArgs, 0, NULL);
 
-  if (!outThread) {
-    wbail(127, "CreateThread (out)");
-  }
+    if (!outThread) {
+      wbail(127, "CreateThread (out)");
+    }
 
-  RelayArgs errRelayArgs = {
-    bufsize: RELAY_BUFSIZE,
-    in: hChildStd_ERR_Rd,
-    out: hParentStdErr,
-  };
-  errThread = (HANDLE) _beginthreadex(NULL, 0, relayThread, &errRelayArgs, 0, NULL);
+    RelayArgs errRelayArgs = {
+      bufsize: RELAY_BUFSIZE,
+      in: hChildStd_ERR_Rd,
+      out: GetStdHandle(STD_ERROR_HANDLE),
+    };
+    errThread = (HANDLE) _beginthreadex(NULL, 0, relayThread, &errRelayArgs, 0, NULL);
 
-  if (!errThread) {
-    wbail(127, "CreateThread (err)");
+    if (!errThread) {
+      wbail(127, "CreateThread (err)");
+    }
   }
 
   HRESULT queryRes;
@@ -503,9 +513,11 @@ int runas(int argc, char** argv) {
   free(ExePath);
   free(DirPath);
 
-  // join both relay threads, which exit naturally because of EOF
-  WaitForSingleObject(outThread, 1000);
-  WaitForSingleObject(errThread, 1000);
+  if (redirectOut) {
+    // join both relay threads, which exit naturally because of EOF
+    WaitForSingleObject(outThread, 1000);
+    WaitForSingleObject(errThread, 1000);
+  }
 
   return code;
 }
