@@ -13,7 +13,7 @@ GCC:=${TRIPLET}-${WINDRES}
 STRIP:=${TRIPLET}-${STRIP}
 endif
 
-OBJECTS := strings.o relay.o errors.o isolate.o 
+OBJECTS := strings.o relay.o errors.o isolate.o isolate.res
 
 .PHONY: clean
 
@@ -32,6 +32,9 @@ errors.o: src/errors.c
 
 relay.o: src/relay.c
 	${GCC} ${CFLAGS} ${ISOLATE_CFLAGS} -c src/relay.c
+
+isolate.res: resources/isolate.rc
+	${WINDRES} resources/isolate.rc -O coff -o isolate.res
 
 clean:
 	rm -f $(OBJECTS) isolate.exe
