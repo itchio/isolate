@@ -523,7 +523,20 @@ int runas(int argc, char** argv) {
 int setup(int argc, char **argv) {
   WCHAR *username = getItchPlayerData(L"username");
   WCHAR *password = getItchPlayerData(L"password");
-  if (username && password) return 1;
+  if (username && password) {
+    HANDLE hToken;
+
+    if (!LogonUserW(username, L".", password,
+          LOGON32_LOGON_INTERACTIVE,
+          LOGON32_PROVIDER_DEFAULT,
+          &hToken)) {
+      // couldn't log in, setup is indeed needed!
+    } else {
+      // can log in, no setup needed
+      CloseHandle(hToken);
+      return 0;
+    }
+  }
 
   DWORD arbitrarySize = 2048;
   USER_INFO_1 ui;
