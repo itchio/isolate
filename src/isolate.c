@@ -446,25 +446,31 @@ int runas(int argc, char** argv) {
   HANDLE outThread;
   HANDLE errThread;
 
+  RelayArgs *outRelayArgs;
+  RelayArgs *errRelayArgs;
+
   if (redirectOut) {
+
     /* Set up stdout and stderr relays */
-    RelayArgs outRelayArgs = {
+    outRelayArgs = calloc(1, sizeof(RelayArgs));
+    *outRelayArgs = (RelayArgs) {
       bufsize: RELAY_BUFSIZE,
       in: hChildStd_OUT_Rd,
       out: GetStdHandle(STD_OUTPUT_HANDLE),
     };
-    outThread = (HANDLE) _beginthreadex(NULL, 0, relayThread, &outRelayArgs, 0, NULL);
+    outThread = (HANDLE) _beginthreadex(NULL, 0, relayThread, outRelayArgs, 0, NULL);
 
     if (!outThread) {
       wbail(127, "CreateThread (out)");
     }
 
-    RelayArgs errRelayArgs = {
+    errRelayArgs = calloc(1, sizeof(RelayArgs));
+    *errRelayArgs = (RelayArgs) {
       bufsize: RELAY_BUFSIZE,
       in: hChildStd_ERR_Rd,
       out: GetStdHandle(STD_ERROR_HANDLE),
     };
-    errThread = (HANDLE) _beginthreadex(NULL, 0, relayThread, &errRelayArgs, 0, NULL);
+    errThread = (HANDLE) _beginthreadex(NULL, 0, relayThread, errRelayArgs, 0, NULL);
 
     if (!errThread) {
       wbail(127, "CreateThread (err)");
@@ -514,7 +520,9 @@ int runas(int argc, char** argv) {
   if (redirectOut) {
     // join both relay threads, which exit naturally because of EOF
     WaitForSingleObject(outThread, 1000);
+    free(outRelayArgs);
     WaitForSingleObject(errThread, 1000);
+    free(errRelayArgs);
   }
 
   return code;
