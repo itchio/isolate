@@ -31,7 +31,7 @@ void fromWideChar (const wchar_t *ws, char **s) {
 
   int num_chars = ret;
 
-  *s = calloc(num_chars, sizeof(char));
+  *s = calloc(num_chars + 1, sizeof(char));
   ret = WideCharToMultiByte(
     CP_UTF8, // CodePage
     0, // dwFlags
