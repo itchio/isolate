@@ -8,7 +8,7 @@ fi
 
 7za | head -2
 gcc -v
-cppcheck --inline-suppr --error-exitcode=1 src
+cppcheck --error-exitcode=1 src
 
 export ISOLATE_VERSION=head
 if [ -n "$CI_BUILD_TAG" ]; then

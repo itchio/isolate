@@ -632,21 +632,7 @@ int setup(int argc, char **argv) {
   return 0;
 }
 
-int main(int _argc, char** _argv) {
-  setvbuf(stdout, NULL, _IONBF, BUFSIZ);
-
-  // get UCS-2 arguments, convert them to UTF-8
-  LPWSTR in_command_line = GetCommandLineW();
-  int argc;
-  LPWSTR* argv_w = CommandLineToArgvW(in_command_line, &argc);
-
-  // argv must be null-terminated, calloc zeroes so this works out.
-  // cppcheck-suppress memleak
-  char **argv = calloc(argc + 1, sizeof(char *));
-  for (int i = 0; i < argc; i++) {
-    fromWideChar(argv_w[i], &argv[i]);
-  }
-
+int _main(int argc, char **argv) {
   if (argc < 2) {
     bail(1, "Usage: isolate PROGRAM ARGS");
   }
@@ -671,4 +657,24 @@ int main(int _argc, char** _argv) {
   } else {
     return runas(argc, argv);
   }
+}
+
+int main(int _argc, char** _argv) {
+  setvbuf(stdout, NULL, _IONBF, BUFSIZ);
+
+  // get UCS-2 arguments, convert them to UTF-8
+  LPWSTR in_command_line = GetCommandLineW();
+  int argc;
+  LPWSTR* argv_w = CommandLineToArgvW(in_command_line, &argc);
+
+  // argv must be null-terminated, calloc zeroes so this works out.
+  // cppcheck-suppress memleak
+  char **argv = calloc(argc + 1, sizeof(char *));
+  for (int i = 0; i < argc; i++) {
+    fromWideChar(argv_w[i], &argv[i]);
+  }
+
+  int ret = _main(argc, argv);
+  free(argv);
+  return ret;
 }
