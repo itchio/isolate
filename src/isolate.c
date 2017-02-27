@@ -641,6 +641,7 @@ int main(int _argc, char** _argv) {
   LPWSTR* argv_w = CommandLineToArgvW(in_command_line, &argc);
 
   // argv must be null-terminated, calloc zeroes so this works out.
+  // cppcheck-suppress memleak
   char **argv = calloc(argc + 1, sizeof(char *));
   for (int i = 0; i < argc; i++) {
     fromWideChar(argv_w[i], &argv[i]);
